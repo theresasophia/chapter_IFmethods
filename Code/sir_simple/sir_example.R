@@ -11,6 +11,9 @@
 ######################################################################
 
 
+rm(list = ls())     # clear objects  
+graphics.off()      # close graphics windows
+
 ###Install packages
 library(pomp)
 library(dplyr)
@@ -32,15 +35,18 @@ registerDoParallel(cores)
 mcopts <- list(set.seed=TRUE)
  
 
+#parallelization of the code
+cores <- detectCores(all.tests = FALSE, logical = TRUE)
+registerDoParallel(cores)
+mcopts <- list(set.seed=TRUE)
+
 #read in the data which was simulated from the model
 dat <- read.table("sim_data.txt")
 
 #plot the data
-cairo_ps(file="~/Dropbox/Bookchapter/Latex/data.eps", width=17, height=9)
 ggplot(dat,mapping=aes(x=time,y=cases))+
   geom_bar(stat="identity")+guides(color=FALSE)+ ylab("Weekly new reported cases")+ 
   xlab("Time (weeks)")+theme(text = element_text(size=45))  
-dev.off()
 
 #determinsitc SIR transmission model
 sir.skel <-  Csnippet("DS = - Beta*I/N*S;
@@ -100,12 +106,6 @@ pomp(data=dat,
      params = params
 ) -> sir
 
-#check if the stochastic model is working by simulating from it
-plot(simulate(sir))
-#check if the right data is loaded into the pomp object by plotting it
-plot(sir)
-
-
 ##  generating the data from above
 # #simulate data 
 # plot(simulate(sir,obs=TRUE,seed=123),type='l')
@@ -113,14 +113,6 @@ plot(sir)
 # dat <- data.frame(time=seq(1:length(x[,,])),cases=x[,,])
 # write.table(dat,file="~/Dropbox/Bookchapter/Rcode/sir_simple/sim_data.txt" )
 
-#check if the determistic skeleton is working as well 
-trajectory(sir,params=params,as=TRUE) -> x
-plot(x$H,type='l')
-
-#parallelization of the code
-cores <- detectCores(all.tests = FALSE, logical = TRUE)
-registerDoParallel(cores)
-mcopts <- list(set.seed=TRUE)
 
 #fixing the parameters we do not want to estimate (here population size N)
 sir_fixed_params<- params["N"]
@@ -130,97 +122,6 @@ sir_box <- rbind(
   Beta=c(0,2),
   gamma= c(0,1)
 )
-
-
-
-########################################################################################## 
-#Fitting the model with deterministic underlying transmission model to the simulated data#
-##########################################################################################
-#number of searches
-n<- 1000
-
-#trajectory matching where errors are removed
-stew(file="sim_dat_traj.rda",{
-  
-  t_global <- system.time({
-    guesses <- as.data.frame(apply(sir_box,1,function(x)runif(n,x[1],x[2])))
-    mle_traj <- foreach(guess=iter(guesses,"row"),.errorhandling="remove",.packages='pomp', .combine=c, 
-                        .options.multicore=mcopts) %dopar% {
-                          traj.match(sir,
-                                     start=c(unlist(guess),sir_fixed_params),
-                                     est=c( "Beta", "gamma"),
-                                     method="Nelder-Mead",reltol=1e-8,maxit=4000, transform=TRUE)
-                          
-                        }
-  })
-},seed=1270401374,kind="L'Ecuyer")
-
-
-#extract the failures and set n to the successful number of searches
-n=as.numeric(length(mle_traj))
-#extract the logliklihood and choose the MLE as the parameter vector with highest loglik
-f <- function(x) {summary(mle_traj[[x]])$loglik}
-x <- matrix(c(seq(from=1,to=n,by=1)),nrow=1,ncol=n)
-liks <- apply(x,2,FUN=f)
-best <- which.max(liks)
-
-#MLE and loglik of MLE
-round(coef(mle_traj[[best]]),2)
-summary(mle_traj[[best]])$loglik
-
-# check if all searches converged (convergence is indicated with 0)
-h<- function(x) {summary(mle_traj[[x]])$convergence}
-conv <- apply(x,2,FUN=h)
-length(which(conv==0))
-
-#extract the coeficients
-g <- function(x) {coef(mle_traj[[x]])}
-x <- matrix(c(seq(from=1,to=n,by=1)),nrow=1,ncol=n)
-coef <- apply(x,2,FUN=g)
-g<-t(coef[,which(conv==0)])
-results_global_all <- data.frame(logLik=liks,gamma=coef["gamma",],Beta=coef["Beta",])
-results_global <- results_global_all[which(conv==0),]
-guesses_con <- guesses[which(conv==0),] 
-
-
-# starting values and corresponding estimates which are in a 90 % quantile of the loglik
-quan<-0.90
-all <- ldply( list(guess=guesses_con[which(results_global$logLik > quantile(results_global$logLik,probs = quan)),], 
-                   results_global=subset(results_global, logLik > quantile(results_global$logLik,probs = quan)) ), .id="type")
-plot(liks[which(conv==0)])
-
-#pair plot- in grey the starting value of the algorithm and in red the estimated value 
-pairs(~logLik+gamma+Beta,data=all, col=ifelse(all$type=="guess", grey(0.5), "red"), pch=16)
-sum(liks < quantile(results_global$logLik,probs = quan))
-
-
-#plot 95% in-sample prediction interval of the model evaluated at the MLE 
-# (data black solid line, mean white solid line, prediction interval red shading)
-trajectory(sir,params=coef(mle_traj[[best]]),as=TRUE) -> x
-
-nfu<-c(qpois(0.975,x$H))
-nfl<-c(qpois(0.025,x$H))
-df2 <- data.frame(lower= nfl, upper=nfu)
-df2$time <- dat$time
-df2$type <- "95% prediction interval"
-df2$type <- factor(df2$type, levels = c("95% prediction interval"))
-df2$labelmedian <- "Mean"
-df2$labelmedian <- factor(df2$labelmedian, levels = c("Mean"))
-df2$mean <- c(x$H)
-dfcases <-melt(dat, id.vars = c("time"), variable.name = "cases")
-df2$cases <- dat$cases
-df2$labelcases <- "Data"
-df2$labelcases <- factor(df2$labelcases, levels = c("Data"))
-
-#pdf(file="~/Dropbox/Cuba/pred_without.pdf", width=17, height=9)
-ggplot(df2) + 
-  geom_ribbon(aes(x = time, ymin = lower, ymax = upper, fill=type), alpha = 0.3) + 
-  geom_line(aes(x = time, y = mean, color = labelmedian),color='white',size=1)+
-  geom_line(aes(x = time, y = cases, color = labelcases),color='black') +
-  ylab("Weekly new cases")+ xlab("Time")+  labs(color="")+ ylab("Number of new cases")+ 
-  xlab("Time (weeks)")+  labs(color="")+theme_bw()+
-  theme(legend.position="none",text = element_text(size=15))
-#dev.off()
 
 
 ########################################################################################## 
@@ -246,9 +147,7 @@ stew(file="sim_data_mif.rda",{
   })
 },seed=1270401374,kind="L'Ecuyer")
 
-
 # diagnostic plots of the iterated filtering search
-cairo_ps(file="~/Dropbox/Bookchapter/Latex/mif.eps", width=17, height=9)
 mifs_global %>%
   conv.rec(c("loglik", "nfail","Beta","gamma"))%>%
   melt() %>%
@@ -263,8 +162,6 @@ df %>%
   labs(x="MIF2 Iteration",y="")+scale_colour_grey( start = 0.3, end = 0.3)+
   facet_wrap(~variable,scales="free_y",ncol=2,labeller = label_parsed)+
 theme(text = element_text(size=45))
-dev.off()
-
 
 #evaluation of the logliklihood of the final mif outputs with particle filter
 stew(file="mif_eval.rda",{
@@ -282,76 +179,6 @@ best <- which.max(liks_global[,1])
 
 coef(sir)<-coef(mifs_global[[best]])
 
-#simulate 10 realizations form the model evaluated at the MLE
-sim = simulate(sir, nsim=1000, states=TRUE,obs=TRUE,seed=1234)
-
-periods <- (length(dat$time))/52
-axis.spots <- (0:(periods))*52+2;
-axis.labels <- as.character((2001):(2001+periods));
-
-## x is time, y is variable
-quantile_obs_fun <- function(x){
-  quantile(sim$obs[,,x],probs=c(0.025,0.5,0.975))
-}
-
-quantile_states_fun <- function(x,y){
-  quantile(sim$states[,,x][y,],probs=c(.025,0.5,.975))
-}
-
-# quantiles,time, variable
-quantile_obs <- array(0,c(3,length(dat$time),1),dimnames=list(c("2.5%","50%","97.5%"),NULL, c("Children")))
-quantile_obs[,,"Children"] <- mapply(quantile_obs_fun,seq(1:length(dat$time)))
-
-
-quantile_states <- array(0,c(3,length(dat$time),1),dimnames=list(c("2.5%","50%","97.5%"),NULL, c("Children")))
-quantile_states[,,"Children"]<-mapply(quantile_states_fun,seq(1:length(dat$time)),"H")
-
-
-#preparing the data fram
-library(tidyr)
-df2 <- as.data.frame(t(cbind(quantile_obs[ , , 1])))
-df4 <- as.data.frame(t(cbind(quantile_states[ , , 1])))
-names(df4)[1:3] <- c("lowernnb", "midnnb", "uppernnb")
-df2$age <- factor(rep(c("children"), each = dim(quantile_obs)[2] ),
-                  levels = c("children"))
-
-df2$time <- rep(seq.int(dim(quantile_obs)[2] ), 1)
-names(df2)[1:3] <- c("lower", "mid", "upper")
-head(df2)
-df2$lowernnb <-df4$lowernnb
-df2$midnnb <-df4$midnnb
-df2$uppernnb <-df4$uppernnb
-df2$type <- "95% PI process model"
-df2$type <- factor(df2$type, levels = c("95% PI process model"))
-df2$type1 <- "95% PI  model"
-df2$type1 <- factor(df2$type1, levels = c("95% PI  model"))
-df2$labelmedian <- "Median total model"
-df2$labelmedian <- factor(df2$labelmedian, levels = c("Median total model"))
-df2$labelmediannnb <- "Median process model"
-df2$labelmediannnb <- factor(df2$labelmediannnb, levels = c("Median process model"))
-dfcases <-melt(dat[,], id.vars = c("time"), variable.name = "cases")
-df2$cases <- dfcases$value
-df2$labelcases <- "Data"
-df2$labelcases <- factor(df2$labelcases, levels = c("Data"))
-
-ggplot(df2) +
-  geom_ribbon(aes(x = time, ymin = lower, ymax = upper, fill=type1), alpha = 0.2) +
-  geom_ribbon(aes(x = time, ymin = lowernnb, ymax = uppernnb, fill=type), alpha = 0.5) +
-  geom_line(aes(x = time, y = mid, color = labelmedian),color='white',size=1) +
-  geom_line(aes(x = time, y = midnnb, color = labelmediannnb),color='red',linetype=3,size=1) +
-  geom_line(aes(x = time, y = cases, color = labelcases),color='black') +
-  facet_wrap( ~age, ncol=1, scales =  "free_y") +
-  scale_x_continuous( breaks = axis.spots,labels = axis.labels)+ ylab("Weekly new cases")+
-  xlab("Time (weeks)")+  labs(color="")+
-  theme_bw()+theme(text = element_text(size=30))+ theme(legend.position="none")
-
-sims <- simulate(sir,params=coef(mifs_global[[best]]),
-                 nsim=1000,as.data.frame=TRUE,include.data=TRUE)
-
-ggplot(sims,mapping=aes(x=time,y=H,group=sim,color=sim=="data"))+
-  geom_line()+guides(color=FALSE)
-
-
 #############################################################################
 # calculations of PROFILE LIKELIHOODS                                        #
 #############################################################################
@@ -364,7 +191,7 @@ profileDesign(
   nprof=2
 ) -> pd_Beta
 pd <- pd_Beta
-dim(pd)
+
 
 #independent mif2 searches in order to construct a profile likelihood
 stew(file="profile_beta_mif.rda",{
@@ -384,16 +211,6 @@ stew(file="profile_beta_mif.rda",{
   })
 },seed=1270401374,kind="L'Ecuyer")
 
-#check for convergence
-mifs_global[2] %>%
-  conv.rec(c("loglik","nfail","Beta", "gamma")) %>%
-  melt() %>%subset(iteration>0)%>%
-  ggplot(aes(x=iteration,y=value,color=variable,group=L1))+
-  geom_line()+
-  guides(color=FALSE)+
-  labs(x="MIF2 Iteration",y="")+
-  facet_wrap(~variable,scales="free_y",ncol=2)+
-  theme_bw()
 
 #calculation of pfilter for ecah mif2 output,.errorhandling=pass to find the filtering failures
 stew(file="profile_beta_lik1.rda",{
@@ -408,7 +225,7 @@ stew(file="profile_beta_lik1.rda",{
 #extract filtering failures
 rownames(liks_global)<- seq(1:nrow(liks_global))
 ind<-as.numeric(rownames(liks_global[which(liks_global[,"call"] == "NULL"), ]))
-ind
+
 # repeat exact same calculations but now .errorhandling=remove to find the filtering failures
 stew(file="profile_beta_lik2.rda",{
   
@@ -433,7 +250,7 @@ profileDesign(
 ) -> pd_gamma
 
 pd <- pd_gamma
-dim(pd)
+
 
 
 #mif2 search
@@ -455,17 +272,6 @@ stew(file="profile_gamma_mif.rda",{
   })
 },seed=1270401374,kind="L'Ecuyer")
 
-#diagnostic plot
-mifs_global[1] %>%
-  conv.rec(c("loglik","nfail","Beta", "gamma")) %>%
-  melt() %>%subset(iteration>0)%>%
-  ggplot(aes(x=iteration,y=value,color=variable,group=L1))+
-  geom_line()+
-  guides(color=FALSE)+
-  labs(x="MIF2 Iteration",y="")+
-  facet_wrap(~variable,scales="free_y",ncol=2)+
-  theme_bw()
-
 #evaluate particle filter and have errorhandling=pass to identify location of filtering failure
 stew(file="profile_gamma_lik1.rda",{
   
@@ -480,7 +286,6 @@ stew(file="profile_gamma_lik1.rda",{
 #extract rownumber of filtering failure
 rownames(liks_global_gamma)<- seq(1:nrow(liks_global_gamma))
 ind<-as.numeric(rownames(liks_global_gamma[which(liks_global_gamma[,"se"] == "NULL"), ]))
-ind
 
 #reeat exact same calculations but errorhandling=remove
 stew(file="profile_gamma_lik2.rda",{
@@ -553,10 +358,7 @@ plot.profile <- function(spacetime_mcap,true,xlab){
     scale_y_continuous(limits = c(-160, -154))
 }
 
-cairo_ps(file="~/Dropbox/Bookchapter/Latex/profile_beta.eps", width=17, height=14)
 plot.profile(spacetime_mcap_beta,1,expression(beta))
-dev.off()
-cairo_ps(file="~/Dropbox/Bookchapter/Latex/profile_gamma.eps", width=17, height=14)
 plot.profile(spacetime_mcap_gamma,0.5,expression(gamma))
-dev.off()
+
 
