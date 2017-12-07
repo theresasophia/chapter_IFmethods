@@ -1,3 +1,18 @@
+######################################################################
+## R code generating graphs and numbers for the Analysis of 
+## Outbreak Data section of the book chapter "Iterated filtering 
+## methods for Markov process epidemic models"  by T. Stocks in the
+## Handbook of Infectious Disease Data Analysis.
+##
+## Author: Theresa Stocks <http://www.su.se/english/profiles/tstoc-1.219526>
+## Affiliation: Department of Mathematics, Stockholm University, Sweden
+##
+## Date: 7/12/2017
+######################################################################
+
+
+
+
 rm(list = ls())     # clear objects  
 graphics.off()      # close graphics windows
 # close graphics windows
