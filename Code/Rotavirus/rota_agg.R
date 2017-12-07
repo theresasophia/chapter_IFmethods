@@ -11,8 +11,6 @@
 ######################################################################
 
 
-
-
 rm(list = ls())     # clear objects  
 graphics.off()      # close graphics windows
 # close graphics windows
@@ -113,8 +111,7 @@ dat_temp[,-(3:5)]%>%
 
 
 # define parameters (without betas)
-params_fixed <- c(gamma=1,
-                  mu=1/(78.86912*52), N=82372825, omega=1/(1*52))
+params_fixed <- c(gamma=1, mu=1/(78.86912*52), N=82372825, omega=1/(1*52))
 first_data <- c(y=dat$cases[2])
 
 
@@ -218,27 +215,6 @@ stew(file="mle_gamma_data_agg.rda",{
 },seed=1270401374,kind="L'Ecuyer")
 
 
-#disgonstic plot of the mif2 searches
-#pdf(file="~/Dropbox/AAPAPER/Latex/diagnostic_gamma_data.pdf", width=17, height=11)
-mifs_global %>%
-  conv.rec(c("loglik", "nfail","beta1","beta11","phi","od","sigma"))%>%
-  melt() %>%
-  mutate(variable = factor(variable)) %>%
-  mutate(variable = recode(variable, beta11 = "rho")) %>%
-  mutate(variable = recode(variable, beta1 = "beta[1]")) %>%
-  mutate(variable = recode(variable, od = "theta"))-> df
-
-df %>%
-  subset(iteration>0)%>%
-  ggplot(aes(x=iteration,y=value,color=variable,group=L1))+
-  geom_line()+
-  guides(color=FALSE)+
-  labs(x="MIF2 Iteration",y="")+
-  facet_wrap(~variable,scales="free_y",ncol=2)+
-  theme_bw()+theme(text = element_text(size=40))
-#dev.off()
-
-
 #particle filter evaulations of the output vetor of the mif2 searches, remove filtering failures
 stew(file="mle_gamma_data_lik_agg.rda",{
   t_global_eval <- system.time({
@@ -252,18 +228,7 @@ stew(file="mle_gamma_data_lik_agg.rda",{
 # choose the set of parameters with hightest loglik as MLE (since errorhabdling=remove, we have to reset the number)
 best <- which.max(liks_global[,1])
 best <- 22
-round(liks_global[best,],2)
-coef(mifs_global[[best]])
 
-#calculate model based R_0, average and yearly range
-r_0 <- function(par){
-  as.numeric( par["beta1"]*par["mu"]/par["mu"]*1/(par["gamma"]+par["mu"])) }
-r0_av <-r_0(coef(mifs_global[[best]]))
-r0_lower <- r_0(coef(mifs_global[[best]]))*(1-coef(mifs_global[[best]])["beta11"])
-r0_upper <- r_0(coef(mifs_global[[best]]))*(1+coef(mifs_global[[best]])["beta11"])
-
-round(r0_av,3)
-c(round(r0_lower,3),round(r0_upper,3))
 
 
 #plot the results
@@ -320,8 +285,6 @@ df2$cases <- dfcases$value
 df2$labelcases <- "Data"
 df2$labelcases <- factor(df2$labelcases, levels = c("Data"))
 
-
-cairo_ps(file="~/Dropbox/Bookchapter/Latex/mle_gamma_data_agg.eps", width=17, height=7)
 ggplot(df2) +
   geom_ribbon(aes(x = time, ymin = lower, ymax = upper, fill=type1), alpha = 0.15) +
   geom_ribbon(aes(x = time, ymin = lowernnb, ymax = uppernnb, fill=type), alpha = 0.35) +
@@ -332,5 +295,5 @@ ggplot(df2) +
   scale_x_continuous( breaks = axis.spots,labels = axis.labels)+ ylab("Weekly new cases")+ xlab("Time (weeks)")+
   labs(color="")+scale_fill_grey( start = 0.1, end = 0.2)+
 theme(text = element_text(size=45))+ theme(legend.position="none")
-dev.off()
+
 
